@@ -5,15 +5,85 @@
 #include <pwd.h>
 #include <grp.h>
 #include <time.h>
+#include <string.h>
 
-void mode_string(mode_t mode, char *str) {
-    if (S_ISDIR(mode))       str[0] = 'd';
-    else if (S_ISLNK(mode))  str[0] = 'l';
-    else if (S_ISCHR(mode))  str[0] = 'c';
-    else if (S_ISBLK(mode))  str[0] = 'b';
-    else if (S_ISFIFO(mode)) str[0] = 'p';
-    else if (S_ISSOCK(mode)) str[0] = 's';
-    else                     str[0] = '-';
+int count[4] = {0, 0, 0, 0};
+
+void padding(const char *dir, const char *filename)
+{
+    struct stat st;
+
+    char fullpath[4096];
+    snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, filename);
+    if (stat(fullpath, &st) != 0)
+    {
+        return;
+    }
+    struct passwd *pw = getpwuid(st.st_uid);
+    struct group *gr = getgrgid(st.st_gid);
+    const char *user = pw ? pw->pw_name : "?";
+    const char *group = gr ? gr->gr_name : "?";
+
+    int comp1 = count[0]; // count[0] = number of character / spaces reserved for ===>>> hardlinks
+    long long temp = st.st_nlink;
+    count[0] = 0;
+    do
+    {
+        count[0]++;
+        temp = temp / 10;
+    } while (temp != 0);
+
+    if (count[0] < comp1)
+    {
+        count[0] = comp1;
+    }
+
+    temp = count[1]; // count[1]    = number of character / spaces reserved for ===>>> users
+    count[1] = strlen(user);
+    if (count[1] < temp)
+    {
+        count[1] = temp;
+    }
+
+    temp = count[2]; // count[2]    = number of character / spaces reserved for ===>>> groups
+    count[2] = strlen(group);
+    if (count[2] < temp)
+    {
+        count[2] = temp;
+    }
+
+    int comp4 = count[3]; // count[3]   = number of character / spaces reserved for ===>>> bytes of file
+    temp = st.st_size;
+    count[3] = 0;
+
+    do
+    {
+        count[3]++;
+        temp = temp / 10;
+    } while (temp != 0);
+
+    if (count[3] < comp4)
+    {
+        count[3] = comp4;
+    }
+}
+
+void mode_string(mode_t mode, char *str)
+{
+    if (S_ISDIR(mode))
+        str[0] = 'd';
+    else if (S_ISLNK(mode))
+        str[0] = 'l';
+    else if (S_ISCHR(mode))
+        str[0] = 'c';
+    else if (S_ISBLK(mode))
+        str[0] = 'b';
+    else if (S_ISFIFO(mode))
+        str[0] = 'p';
+    else if (S_ISSOCK(mode))
+        str[0] = 's';
+    else
+        str[0] = '-';
 
     str[1] = (mode & S_IRUSR) ? 'r' : '-';
     str[2] = (mode & S_IWUSR) ? 'w' : '-';
@@ -27,12 +97,14 @@ void mode_string(mode_t mode, char *str) {
     str[10] = '\0';
 }
 
-void print_long(const char *dir, const char *name) {
+void print_long(const char *dir, const char *name)
+{
     char fullpath[4096];
     snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, name);
 
     struct stat st;
-    if (lstat(fullpath, &st) < 0) {
+    if (lstat(fullpath, &st) < 0)
+    {
         perror(name);
         return;
     }
@@ -40,7 +112,7 @@ void print_long(const char *dir, const char *name) {
     mode_string(st.st_mode, modes);
 
     struct passwd *pw = getpwuid(st.st_uid);
-    struct group  *gr = getgrgid(st.st_gid);
+    struct group *gr = getgrgid(st.st_gid);
     const char *user = pw ? pw->pw_name : "?";
     const char *group = gr ? gr->gr_name : "?";
 
@@ -50,57 +122,79 @@ void print_long(const char *dir, const char *name) {
     strftime(timebuf, sizeof(timebuf), "%b %e %H:%M", tm);
 
     printf(
-        "%s %lu %s %s %ld %s %s\n",
+        "%s %*lu %*s %*s %*ld %s %s \n",
         modes,
-        (unsigned long)st.st_nlink,
-        user,
-        group,
-        (long)st.st_size,
+        count[0], (unsigned long)st.st_nlink,
+        count[1], user,
+        count[2], group,
+        count[3], (long)st.st_size,
         timebuf,
         name
-    );
-
+        );
 }
 
 int show_all = 0;
 int long_format = 0;
 
-int main (int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
     int opt;
 
-    while((opt = getopt(argc, argv, "al")) != -1){
-        switch (opt) {
-            case 'a':
-                show_all = 1;
-                break;
-            case 'l':
-                long_format = 1;
-                break;
-            default:
-                fprintf(stderr, "usage: %s [-al] [path]\n", argv[0]);
-                return 1;
+    while ((opt = getopt(argc, argv, "al")) != -1)
+    {
+        switch (opt)
+        {
+        case 'a':
+            show_all = 1;
+            break;
+        case 'l':
+            long_format = 1;
+            break;
+        default:
+            fprintf(stderr, "usage: %s [-al] [path]\n", argv[0]);
+            return 1;
         }
     }
 
     const char *path = (optind < argc) ? argv[optind] : ".";
 
     DIR *dir = opendir(path);
-    if (!dir) {
+    DIR *innerdir = opendir(path);
+    if (!dir || !innerdir)
+    {
         perror("opendir");
         return 1;
     }
 
-    struct dirent *entry;
-    while((entry = readdir(dir)) != NULL) { 
-        if (!show_all && entry->d_name[0] == '.') continue;
-        if(long_format) {
+    struct dirent *entry, *empress;
+
+    while ((entry = readdir(dir)) != NULL)
+    {
+        while ((empress = readdir(innerdir)) != NULL)
+        {
+            if (!show_all && empress->d_name[0] == '.')
+            {
+                continue;
+            }
+            padding(path, empress->d_name);
+        }
+
+        if (!show_all && entry->d_name[0] == '.')
+        {
+            continue;
+        }
+
+        if (long_format)
+        {
             print_long(path, entry->d_name);
         }
-        else {
+        else
+        {
             printf("%s\n", entry->d_name);
         }
     }
 
+    closedir(innerdir);
     closedir(dir);
     return 0;
 }
